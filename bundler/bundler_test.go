@@ -80,14 +80,21 @@ type bundleObject struct {
 	Status      BundleStatus
 }
 
-var godaddyIssuerString = `/Country=US/Organization=The Go Daddy Group, Inc./OrganizationalUnit=Go Daddy Class 2 Certification Authority`
-var godaddySubjectString = `/Country=US/Province=Arizona/Locality=Scottsdale/Organization=GoDaddy.com, Inc./OrganizationalUnit=http://certificates.godaddy.com/repository/CommonName=Go Daddy Secure Certification Authority/SerialNumber=07969287`
+var testBundleIssuerString = `/Country=US/Organization=CFSSL Test CA/CommonName=CFSSL Test Root CA`
+var testBundleSubjectString = `/Country=US/Province=California/Locality=San Francisco/Organization=CFSSL Test/OrganizationalUnit=Test PKI/CommonName=CFSSL Test Intermediate CA`
 
 // Test marshal to JSON
 // Also serves as a JSON format regression test.
 func TestBundleMarshalJSON(t *testing.T) {
+	intBundlePEM, err := os.ReadFile(testIntCaBundle)
+	if err != nil {
+		t.Fatal(err)
+	}
 	b := newBundler(t)
-	bundle, _ := b.BundleFromPEMorDER(GoDaddyIntermediateCert, nil, Optimal, "")
+	bundle, err := b.BundleFromPEMorDER(intBundlePEM, nil, Optimal, "")
+	if err != nil {
+		t.Fatalf("BundleFromPEMorDER failed: %v", err)
+	}
 	bytes, err := json.Marshal(bundle)
 
 	if err != nil {
@@ -103,20 +110,40 @@ func TestBundleMarshalJSON(t *testing.T) {
 	if obj.Bundle == "" {
 		t.Fatal("bundle is empty.")
 	}
-	if obj.Bundle != string(GoDaddyIntermediateCert) {
-		t.Fatal("bundle is incorrect:", obj.Bundle)
+	// The bundler reassembles PEM rather than echoing the input bytes,
+	// so compare by parsing rather than raw byte equality.
+	bundleCerts, err := helpers.ParseCertificatesPEM([]byte(obj.Bundle))
+	if err != nil || len(bundleCerts) == 0 {
+		t.Fatal("bundle does not contain a valid certificate:", obj.Bundle)
+	}
+	if bundleCerts[0].Subject.CommonName != "CFSSL Test Intermediate CA" {
+		t.Fatal("bundle cert has unexpected CN:", bundleCerts[0].Subject.CommonName)
 	}
 
 	if obj.Key != "" {
 		t.Fatal("key is not empty:", obj.Key)
 	}
 
-	if obj.Root != string(GoDaddyRootCert) {
-		t.Fatal("Root is not recovered")
+	if obj.Root == "" {
+		t.Fatal("Root is empty")
+	}
+	rootCerts, err := helpers.ParseCertificatesPEM([]byte(obj.Root))
+	if err != nil || len(rootCerts) == 0 {
+		t.Fatal("root does not contain a valid certificate:", obj.Root)
+	}
+	if rootCerts[0].Subject.CommonName != "CFSSL Test Root CA" {
+		t.Fatal("root cert has unexpected CN:", rootCerts[0].Subject.CommonName)
 	}
 
-	if obj.Cert != string(GoDaddyIntermediateCert) {
-		t.Fatal("Cert is not recovered")
+	if obj.Cert == "" {
+		t.Fatal("Cert is empty")
+	}
+	certCerts, err := helpers.ParseCertificatesPEM([]byte(obj.Cert))
+	if err != nil || len(certCerts) == 0 {
+		t.Fatal("cert does not contain a valid certificate:", obj.Cert)
+	}
+	if certCerts[0].Subject.CommonName != "CFSSL Test Intermediate CA" {
+		t.Fatal("cert has unexpected CN:", certCerts[0].Subject.CommonName)
 	}
 
 	if obj.KeyType != "2048-bit RSA" {
@@ -127,19 +154,19 @@ func TestBundleMarshalJSON(t *testing.T) {
 		t.Fatal("Incorrect key size:", obj.KeySize)
 	}
 
-	if obj.Issuer != godaddyIssuerString {
+	if obj.Issuer != testBundleIssuerString {
 		t.Fatal("Incorrect issuer:", obj.Issuer)
 	}
 
-	if obj.Subject != godaddySubjectString {
+	if obj.Subject != testBundleSubjectString {
 		t.Fatal("Incorrect subject:", obj.Subject)
 	}
 
-	if obj.Expires != "2026-11-16T01:54:37Z" {
+	if obj.Expires != "2035-01-01T00:00:00Z" {
 		t.Fatal("Incorrect expiration time:", obj.Expires)
 	}
 
-	if len(obj.Hostnames) != 1 || obj.Hostnames[0] != "Go Daddy Secure Certification Authority" {
+	if len(obj.Hostnames) != 1 || obj.Hostnames[0] != "CFSSL Test Intermediate CA" {
 		t.Fatal("Incorrect hostnames:", obj.Hostnames)
 	}
 
@@ -151,11 +178,11 @@ func TestBundleMarshalJSON(t *testing.T) {
 		t.Fatal("Incorrect CRL support flag:", obj.CRLSupport)
 	}
 
-	if len(obj.OCSP) != 1 || obj.OCSP[0] != `http://ocsp.godaddy.com` {
+	if len(obj.OCSP) != 1 || obj.OCSP[0] != `http://ocsp.cfssl.test` {
 		t.Fatal("Incorrect ocsp server list:", obj.OCSP)
 	}
 
-	if obj.Signature != "SHA1WithRSA" {
+	if obj.Signature != "SHA256WithRSA" {
 		t.Fatal("Incorrect cert signature method:", obj.Signature)
 	}
 }
@@ -238,11 +265,18 @@ func TestBundleWithRSAKeyMarshalJSON(t *testing.T) {
 func TestBundleHostnamesMarshalJSON(t *testing.T) {
 	b := newBundler(t)
 
-	bundle, _ := b.BundleFromPEMorDER(GoDaddyIntermediateCert, nil, Optimal, "")
-	expected := []byte(`["Go Daddy Secure Certification Authority"]`)
+	intBundlePEM, err := os.ReadFile(testIntCaBundle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bundle, err := b.BundleFromPEMorDER(intBundlePEM, nil, Optimal, "")
+	if err != nil {
+		t.Fatalf("BundleFromPEMorDER failed: %v", err)
+	}
+	expected := []byte(`["CFSSL Test Intermediate CA"]`)
 	hostnames, _ := json.Marshal(bundle.Hostnames)
 	if !bytes.Equal(hostnames, expected) {
-		t.Fatal("Hostnames construction failed for godaddy root cert.", string(hostnames))
+		t.Fatal("Hostnames construction failed for test intermediate cert.", string(hostnames))
 	}
 
 }
@@ -561,8 +595,9 @@ func TestForceBundleNoFallback(t *testing.T) {
 
 // Regression test: ubiquity bundle test with SHA2-homogeneous preference should not override root ubiquity.
 func TestSHA2HomogeneityAgainstUbiquity(t *testing.T) {
-	// create a CA signer and signs a new intermediate with SHA-1
-	caSigner := makeCASignerFromFile(testCAFile, testCAKeyFile, x509.SHA1WithRSA, t)
+	// Go >= 1.24 rejects SHA-1; use SHA-384 as the non-homogeneous hash.
+	// The ubiquity logic still prefers the longer SHA-384-free chain.
+	caSigner := makeCASignerFromFile(testCAFile, testCAKeyFile, x509.SHA384WithRSA, t)
 	interL1Bytes := signCSRFile(caSigner, interL1CSR, t)
 
 	// create a inter L1 signer
@@ -737,7 +772,10 @@ func TestSHA2Warning(t *testing.T) {
 // Regression test on ECDSA Warning
 // A test bundle that contains ECDSA384 and SHA-2. Expect ECDSA warning and SHA-2 warning.
 func TestECDSAWarning(t *testing.T) {
-	b := newCustomizedBundlerFromFile(t, testCAFile, interL1SHA1, "")
+	// interL1SHA1 uses SHA-1WithRSA which Go >= 1.24 rejects during chain
+	// verification. Use the SHA-256 inter-L1 instead; ECDSA and SHA-2 warnings
+	// still fire because inter-L2 uses an ECDSA-384 key.
+	b := newCustomizedBundlerFromFile(t, testCAFile, sha2Intermediate, "")
 
 	optimalBundle, err := b.BundleFromFile(interL2SHA2, "", Optimal, "")
 	if err != nil {
